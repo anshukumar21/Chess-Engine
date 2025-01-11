@@ -1,0 +1,350 @@
+"""
+Handling the AI moves.
+"""
+import random
+import chess
+import numpy as np
+import tensorflow as tf
+import os
+import heapq
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # or '3' for only errors
+
+piece_score = {"K": 0, "Q": 9, "R": 5, "B": 3, "N": 3, "p": 1}
+
+knight_scores = [[0.0, 0.1, 0.2, 0.2, 0.2, 0.2, 0.1, 0.0],
+                 [0.1, 0.3, 0.5, 0.5, 0.5, 0.5, 0.3, 0.1],
+                 [0.2, 0.5, 0.6, 0.65, 0.65, 0.6, 0.5, 0.2],
+                 [0.2, 0.55, 0.65, 0.7, 0.7, 0.65, 0.55, 0.2],
+                 [0.2, 0.5, 0.65, 0.7, 0.7, 0.65, 0.5, 0.2],
+                 [0.2, 0.55, 0.6, 0.65, 0.65, 0.6, 0.55, 0.2],
+                 [0.1, 0.3, 0.5, 0.55, 0.55, 0.5, 0.3, 0.1],
+                 [0.0, 0.1, 0.2, 0.2, 0.2, 0.2, 0.1, 0.0]]
+
+bishop_scores = [[0.0, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.0],
+                 [0.2, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.2],
+                 [0.2, 0.4, 0.5, 0.6, 0.6, 0.5, 0.4, 0.2],
+                 [0.2, 0.5, 0.5, 0.6, 0.6, 0.5, 0.5, 0.2],
+                 [0.2, 0.4, 0.6, 0.6, 0.6, 0.6, 0.4, 0.2],
+                 [0.2, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.2],
+                 [0.2, 0.5, 0.4, 0.4, 0.4, 0.4, 0.5, 0.2],
+                 [0.0, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.0]]
+
+rook_scores = [[0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25],
+               [0.5, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.5],
+               [0.0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.0],
+               [0.0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.0],
+               [0.0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.0],
+               [0.0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.0],
+               [0.0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.0],
+               [0.25, 0.25, 0.25, 0.5, 0.5, 0.25, 0.25, 0.25]]
+
+queen_scores = [[0.0, 0.2, 0.2, 0.3, 0.3, 0.2, 0.2, 0.0],
+                [0.2, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.2],
+                [0.2, 0.4, 0.5, 0.5, 0.5, 0.5, 0.4, 0.2],
+                [0.3, 0.4, 0.5, 0.5, 0.5, 0.5, 0.4, 0.3],
+                [0.4, 0.4, 0.5, 0.5, 0.5, 0.5, 0.4, 0.3],
+                [0.2, 0.5, 0.5, 0.5, 0.5, 0.5, 0.4, 0.2],
+                [0.2, 0.4, 0.5, 0.4, 0.4, 0.4, 0.4, 0.2],
+                [0.0, 0.2, 0.2, 0.3, 0.3, 0.2, 0.2, 0.0]]
+
+pawn_scores = [[0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8],
+               [0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7],
+               [0.3, 0.3, 0.4, 0.5, 0.5, 0.4, 0.3, 0.3],
+               [0.25, 0.25, 0.3, 0.45, 0.45, 0.3, 0.25, 0.25],
+               [0.2, 0.2, 0.2, 0.4, 0.4, 0.2, 0.2, 0.2],
+               [0.25, 0.15, 0.1, 0.2, 0.2, 0.1, 0.15, 0.25],
+               [0.25, 0.3, 0.3, 0.0, 0.0, 0.3, 0.3, 0.25],
+               [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]]
+
+piece_position_scores = {"wN": knight_scores,
+                         "bN": knight_scores[::-1],
+                         "wB": bishop_scores,
+                         "bB": bishop_scores[::-1],
+                         "wQ": queen_scores,
+                         "bQ": queen_scores[::-1],
+                         "wR": rook_scores,
+                         "bR": rook_scores[::-1],
+                         "wp": pawn_scores,
+                         "bp": pawn_scores[::-1]}
+
+CHECKMATE = 1000
+STALEMATE = 0
+DEPTH = 3
+
+
+def findBestMove(game_state, valid_moves, return_queue):
+    global next_move
+    next_move = None
+    random.shuffle(valid_moves)
+    findMoveNegaMaxAlphaBeta(game_state, valid_moves, DEPTH, -CHECKMATE, CHECKMATE,
+                             1 if game_state.white_to_move else -1)
+    return_queue.put(next_move)
+
+def encode_board(board):
+    # first lets turn the board into a string
+    board_str = str(board)
+    # then lets remove all the spaces
+    material_dict = {
+        'p': -1,
+        'b': -3.5,
+        'n': -3,
+        'r': -5,
+        'q': -9,
+        'k': -4,
+        'K': 4,
+        '.': 0,
+        'P': 1,
+        'B': 3.5,
+        'N': 3,
+        'R': 5,
+        'Q': 9,
+    }
+    board_str = board_str.replace(' ', '')
+    board_list = []
+    for row in board_str.split('\n'):
+        row_list = []
+        for piece in row:
+            # print(piece)
+            row_list.append(material_dict.get(piece))
+        board_list.append(row_list)
+    data = np.array(board_list)
+    data = tf.expand_dims(data, axis=0)
+    return data  
+
+def encode_fen_string(fen_str):
+    board = chess.Board(fen=fen_str)
+    return encode_board(board)
+
+def to_fen(game_state):
+    fen_string = ""
+    count = 0
+
+    # PIECE POSITION
+    for row in range(len(game_state.board)):
+        count = 0
+        for col in range(len(game_state.board[row])):
+            piece = game_state.board[row][col]
+            if piece != '--':
+                if count != 0:
+                    fen_string += str(count)
+                    count = 0
+                if piece[0] == 'w':
+                    # if piece[1] == 'p':
+                    #     piece[1] = 'P'
+                    fen_string += piece[1].upper()
+                else:
+                    # if piece[1] != 'p':
+                    #     piece[1] = str(piece[1]).lower()
+                    fen_string += piece[1].lower()
+
+            else:
+                count += 1
+
+        if count != 0:
+            fen_string += str(count)
+    
+        if row != len(game_state.board)-1:
+            fen_string += '/'
+
+    fen_string += " "
+
+    # WHOSE MOVE IT IS?
+    if game_state.white_to_move:
+        fen_string += "w "
+    else:
+        fen_string += "b "
+
+    # CASTLING
+    check = False
+    # current_castling_rights = game_state.castle_rights_log[-1]
+    if game_state.castle_rights_log[-1].wks == True:
+        fen_string += "K"
+        check = True
+    if game_state.castle_rights_log[-1].wqs == True:
+        fen_string += "Q"
+        check = True
+    if game_state.castle_rights_log[-1].bks ==  True:
+        fen_string += "k"
+        check = True
+    if game_state.castle_rights_log[-1].bqs == True:
+        fen_string += "q"
+        check = True
+    if check == False:
+        fen_string += "-"
+    
+    fen_string += " "
+    
+    # ENPASSANT
+    fen_string += "- "
+
+    # 50 MOVE DRAW
+    fen_string += "10 "
+
+    # MOVES
+    moves = 0
+    if len(game_state.move_log)%2 == 1:
+        moves = len(game_state.move_log)+1
+    fen_string += str(int(moves/2))
+    return fen_string
+
+def scores(fen_string):
+    board = encode_fen_string(fen_string)
+    model = tf.keras.models.load_model('chess_model.h5')
+    return model.predict(board)
+
+def best_move(game_state, valid_moves, return_queue):
+    global next_move
+    next_move = None
+    max_score = -1e8
+    nextmove_list = []
+    min_score = 1e8
+    for move in valid_moves:
+        game_state.makeMove(move)
+        fen_string = to_fen(game_state)
+        score = scores(fen_string)
+        game_state.undoMove()
+
+        move_score = score[0][0]
+
+        nextmove_list.append((move_score, move))
+
+        if move_score > max_score and game_state.white_to_move == False:
+            max_score = move_score
+            next_move = move
+        if move_score < min_score and game_state.white_to_move == True:
+            min_score = move_score
+            next_move = move
+    
+    top_3 = heapq.nlargest(3, nextmove_list)
+    bot_3 = heapq.nsmallest(3,nextmove_list)
+
+    if game_state.white_to_move == False:
+        for score, move in top_3:
+            print(f"score of black: {score}, move: {move}")
+        print(max_score)
+    if game_state.white_to_move == True:
+        for score, move in bot_3:
+            print(f"score of white: {score}, move: {move}")
+        print(min_score)
+
+    return_queue.put(next_move)
+
+def findMoveNegaMaxAlphaBeta(game_state, valid_moves, depth, alpha, beta, turn_multiplier):
+    global next_move
+    if depth == 0:
+        return turn_multiplier * scoreBoard(game_state)
+    # move ordering - implement later //TODO
+    max_score = -CHECKMATE
+    for move in valid_moves:
+        game_state.makeMove(move)
+        next_moves = game_state.getValidMoves()
+        score = -findMoveNegaMaxAlphaBeta(game_state, next_moves, depth - 1, -beta, -alpha, -turn_multiplier)
+        if score > max_score:
+            max_score = score
+            if depth == DEPTH:
+                next_move = move
+        game_state.undoMove()
+        if max_score > alpha:
+            alpha = max_score
+        if alpha >= beta:
+            break
+    return max_score
+
+
+def scoreBoard(game_state):
+    """
+    Score the board. A positive score is good for white, a negative score is good for black.
+    """
+    if game_state.checkmate:
+        if game_state.white_to_move:
+            return -CHECKMATE  # black wins
+        else:
+            return CHECKMATE  # white wins
+    elif game_state.stalemate:
+        return STALEMATE
+    score = 0
+    for row in range(len(game_state.board)):
+        for col in range(len(game_state.board[row])):
+            piece = game_state.board[row][col]
+            if piece != "--":
+                piece_position_score = 0
+                if piece[1] != "K":
+                    piece_position_score = piece_position_scores[piece][row][col]
+                if piece[0] == "w":
+                    score += piece_score[piece[1]] + piece_position_score
+                if piece[0] == "b":
+                    score -= piece_score[piece[1]] + piece_position_score
+
+    return score
+
+
+def findRandomMove(valid_moves):
+    """
+    Picks and returns a random valid move.
+    """
+    return random.choice(valid_moves)
+
+class CastleRights:
+    def __init__(self, wks, bks, wqs, bqs):
+        self.wks = wks  # White king-side castling rights
+        self.bks = bks  # Black king-side castling rights
+        self.wqs = wqs  # White queen-side castling rights
+        self.bqs = bqs  # Black queen-side castling rights
+
+# class GameState:
+#     def __init__(self):
+#         """
+#         Board is an 8x8 2D list, each element in list has 2 characters.
+#         The first character represents the color of the piece: 'b' or 'w'.
+#         The second character represents the type of the piece: 'R', 'N', 'B', 'Q', 'K' or 'p'.
+#         "--" represents an empty space with no piece.
+#         """
+#         self.board = [
+#             ["bR", "bN", "bB", "bQ", "bK", "bB", "bN", "bR"],
+#             ["bp", "bp", "bp", "bp", "bp", "bp", "bp", "bp"],
+#             ["--", "--", "--", "--", "--", "--", "--", "--"],
+#             ["--", "--", "--", "--", "--", "--", "--", "--"],
+#             ["--", "--", "--", "--", "--", "--", "--", "--"],
+#             ["--", "--", "--", "--", "--", "--", "--", "--"],
+#             ["wp", "wp", "wp", "wp", "wp", "wp", "wp", "wp"],
+#             ["wR", "wN", "wB", "wQ", "wK", "wB", "wN", "wR"]]
+#         self.moveFunctions = {"p": self.getPawnMoves, "R": self.getRookMoves, "N": self.getKnightMoves,
+#                               "B": self.getBishopMoves, "Q": self.getQueenMoves, "K": self.getKingMoves}
+#         self.white_to_move = True
+#         self.move_log = []
+#         self.white_king_location = (7, 4)
+#         self.black_king_location = (0, 4)
+#         self.checkmate = False
+#         self.stalemate = False
+#         self.in_check = False
+#         self.pins = []
+#         self.checks = []
+#         self.enpassant_possible = ()  # coordinates for the square where en-passant capture is possible
+#         self.enpassant_possible_log = [self.enpassant_possible]
+#         self.current_castling_rights = CastleRights(True, True, True, True)
+#         self.castle_rights_log = [CastleRights(self.current_castling_rights.wks, self.current_castling_rights.bks,
+#                                                self.current_castling_rights.wqs, self.current_castling_rights.bqs)]
+    
+#     # Example move generation functions
+#     def getPawnMoves(self, r, c, moves):
+#         pass
+    
+#     def getRookMoves(self, r, c, moves):
+#         pass
+    
+#     def getKnightMoves(self, r, c, moves):
+#         pass
+    
+#     def getBishopMoves(self, r, c, moves):
+#         pass
+    
+#     def getQueenMoves(self, r, c, moves):
+#         pass
+    
+#     def getKingMoves(self, r, c, moves):
+#         pass
+
+# game_state = GameState()
+# print(to_fen(game_state))
+# print()
